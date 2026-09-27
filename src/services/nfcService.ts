@@ -60,28 +60,66 @@ export function summarizeNdefMessage(records: NdefRecord[]): {
     .map((r) => r.content)
     .filter((text) => text.length > 0);
   const content = meaningful.join('\n');
+  // Blank decoded text is still a real record. Only a missing message or TNF EMPTY is empty.
   const isEmpty =
-    records.length === 0 ||
-    summaries.every((r) => r.type === 'EMPTY' || r.content.length === 0);
+    records.length === 0 || summaries.every((record) => record.type === 'EMPTY');
   return { records: summaries, content, isEmpty };
+}
+
+function errorIdentity(error: unknown): { name: string; message: string } {
+  if (typeof error === 'string') {
+    return { name: '', message: error };
+  }
+  if (error instanceof Error) {
+    const ctorName = error.constructor?.name ?? '';
+    const name = error.name !== 'Error' ? error.name : ctorName;
+    return { name, message: error.message ?? '' };
+  }
+  return { name: '', message: 'Unknown NFC error' };
 }
 
 function mapError(error: unknown): NfcServiceError {
   if (error instanceof NfcServiceError) {
     return error;
   }
-  const name = error instanceof Error ? error.name : '';
-  if (name === 'UserCancel' || name === 'SessionInvalidated') {
+  const { name, message } = errorIdentity(error);
+  const normalized = `${name} ${message}`.toLowerCase();
+
+  if (
+    name === 'UserCancel' ||
+    name === 'SessionInvalidated' ||
+    normalized.includes('cancelled') ||
+    normalized.includes('canceled') ||
+    normalized.includes('user cancel')
+  ) {
     return new NfcServiceError('SESSION_CANCELLED', 'NFC session cancelled');
   }
-  if (name === 'RadioDisabled') {
+  if (
+    name === 'RadioDisabled' ||
+    normalized.includes('nfc is disabled') ||
+    normalized.includes('nfc disabled') ||
+    normalized.includes('radio disabled')
+  ) {
     return new NfcServiceError('NFC_DISABLED', 'NFC is disabled');
   }
-  if (name === 'UnsupportedFeature') {
+  if (
+    name === 'UnsupportedFeature' ||
+    normalized.includes('no nfc support') ||
+    normalized.includes('nfc is not available')
+  ) {
     return new NfcServiceError('NFC_UNAVAILABLE', 'NFC is not available');
   }
-  const message = error instanceof Error ? error.message : 'Unknown NFC error';
-  return new NfcServiceError('UNKNOWN', message);
+  if (
+    name === 'TagNotWritable' ||
+    normalized.includes('not writeable') ||
+    normalized.includes('not writable')
+  ) {
+    return new NfcServiceError('TAG_NOT_WRITABLE', 'Tag is not writable');
+  }
+  if (normalized.includes('unsupported tag')) {
+    return new NfcServiceError('UNSUPPORTED_TAG', message || 'Unsupported tag');
+  }
+  return new NfcServiceError('UNKNOWN', message || 'Unknown NFC error');
 }
 
 type TagLike = {
@@ -104,7 +142,27 @@ function tagMeta(tag: TagLike | null, msg: TagLike | null) {
 }
 
 export async function init(): Promise<void> {
-  await NfcManager.start();
+  try {
+    await NfcManager.start();
+  } catch (error) {
+    throw mapError(error);
+  }
+}
+
+/** Reject before a technology request when the radio is missing or switched off. */
+export async function ensureNfcReady(): Promise<void> {
+  try {
+    const supported = await NfcManager.isSupported();
+    if (!supported) {
+      throw new NfcServiceError('NFC_UNAVAILABLE', 'NFC is not available');
+    }
+    const enabled = await NfcManager.isEnabled();
+    if (!enabled) {
+      throw new NfcServiceError('NFC_DISABLED', 'NFC is disabled');
+    }
+  } catch (error) {
+    throw mapError(error);
+  }
 }
 
 export async function isSupported(): Promise<boolean> {
@@ -138,7 +196,12 @@ export async function readTag(onDetected?: () => void): Promise<TagReadResult> {
 
 export async function writeUri(
   uri: string,
-  opts?: { onDetected?: () => void; allowOverwrite?: boolean },
+  opts?: {
+    onDetected?: () => void;
+    onWriting?: () => void;
+    allowOverwrite?: boolean;
+    expectedPreviousContent?: string;
+  },
 ): Promise<{ uid: string | null; previousContent: string; wrote: boolean }> {
   try {
     await NfcManager.requestTechnology(NfcTech.Ndef);
@@ -155,7 +218,19 @@ export async function writeUri(
     if (!isEmpty && opts?.allowOverwrite !== true) {
       throw new NfcServiceError('WRITE_FAILED', 'Tag already contains data');
     }
+    if (
+      opts?.allowOverwrite === true &&
+      opts.expectedPreviousContent !== undefined &&
+      !isEmpty &&
+      content !== opts.expectedPreviousContent
+    ) {
+      throw new NfcServiceError(
+        'WRITE_FAILED',
+        'Tag content does not match the confirmed content',
+      );
+    }
 
+    opts?.onWriting?.();
     const bytes = Ndef.encodeMessage([Ndef.uriRecord(uri)]);
     await NfcManager.ndefHandler.writeNdefMessage(bytes);
 
@@ -174,12 +249,14 @@ export async function writeUriAndVerify(
     onWriting?: () => void;
     onVerifying?: () => void;
     allowOverwrite?: boolean;
+    expectedPreviousContent?: string;
   },
 ): Promise<WriteVerifyResult> {
-  opts?.onWriting?.();
   const writeResult = await writeUri(uri, {
     onDetected: opts?.onDetected,
+    onWriting: opts?.onWriting,
     allowOverwrite: opts?.allowOverwrite,
+    expectedPreviousContent: opts?.expectedPreviousContent,
   });
 
   opts?.onVerifying?.();
@@ -187,18 +264,14 @@ export async function writeUriAndVerify(
 
   const readBackContent = readResult.content;
   // Exact string match only — no trim/lowercase normalization (production safety).
-  if (readBackContent !== uri) {
-    throw new NfcServiceError(
-      'VERIFY_MISMATCH',
-      `Read-back URI does not match: expected "${uri}", got "${readBackContent}"`,
-    );
-  }
+  // A completed write with a mismatch is returned so callers can record history.
+  const verified = readBackContent === uri;
 
   return {
     uid: writeResult.uid ?? readResult.uid,
     writtenContent: uri,
     readBackContent,
-    verified: true,
+    verified,
     detected: true,
     written: writeResult.wrote,
   };
