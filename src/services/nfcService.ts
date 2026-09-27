@@ -1,6 +1,6 @@
 import NfcManager, { Ndef, NfcTech } from 'react-native-nfc-manager';
 import type { NdefRecord } from 'react-native-nfc-manager';
-import type { NdefRecordSummary, TagReadResult } from '../types/nfc';
+import type { NdefRecordSummary, TagReadResult, WriteVerifyResult } from '../types/nfc';
 import { NfcServiceError } from '../types/nfc';
 
 export function formatUid(id: unknown): string | null {
@@ -134,4 +134,72 @@ export async function readTag(onDetected?: () => void): Promise<TagReadResult> {
   } finally {
     await NfcManager.cancelTechnologyRequest().catch(() => undefined);
   }
+}
+
+export async function writeUri(
+  uri: string,
+  opts?: { onDetected?: () => void; allowOverwrite?: boolean },
+): Promise<{ uid: string | null; previousContent: string; wrote: boolean }> {
+  try {
+    await NfcManager.requestTechnology(NfcTech.Ndef);
+    opts?.onDetected?.();
+    const tag = (await NfcManager.getTag()) as TagLike | null;
+    const msg = (await NfcManager.ndefHandler.getNdefMessage()) as TagLike | null;
+    const ndefRecords = msg?.ndefMessage ?? tag?.ndefMessage ?? [];
+    const { content, isEmpty } = summarizeNdefMessage(ndefRecords);
+    const { uid, isWritable } = tagMeta(tag, msg);
+
+    if (isWritable === false) {
+      throw new NfcServiceError('TAG_NOT_WRITABLE', 'Tag is not writable');
+    }
+    if (!isEmpty && opts?.allowOverwrite !== true) {
+      throw new NfcServiceError('WRITE_FAILED', 'Tag already contains data');
+    }
+
+    const bytes = Ndef.encodeMessage([Ndef.uriRecord(uri)]);
+    await NfcManager.ndefHandler.writeNdefMessage(bytes);
+
+    return { uid, previousContent: content, wrote: true };
+  } catch (error) {
+    throw mapError(error);
+  } finally {
+    await NfcManager.cancelTechnologyRequest().catch(() => undefined);
+  }
+}
+
+export async function writeUriAndVerify(
+  uri: string,
+  opts?: {
+    onDetected?: () => void;
+    onWriting?: () => void;
+    onVerifying?: () => void;
+    allowOverwrite?: boolean;
+  },
+): Promise<WriteVerifyResult> {
+  opts?.onWriting?.();
+  const writeResult = await writeUri(uri, {
+    onDetected: opts?.onDetected,
+    allowOverwrite: opts?.allowOverwrite,
+  });
+
+  opts?.onVerifying?.();
+  const readResult = await readTag();
+
+  const readBackContent = readResult.content;
+  // Exact string match only — no trim/lowercase normalization (production safety).
+  if (readBackContent !== uri) {
+    throw new NfcServiceError(
+      'VERIFY_MISMATCH',
+      `Read-back URI does not match: expected "${uri}", got "${readBackContent}"`,
+    );
+  }
+
+  return {
+    uid: writeResult.uid ?? readResult.uid,
+    writtenContent: uri,
+    readBackContent,
+    verified: true,
+    detected: true,
+    written: writeResult.wrote,
+  };
 }
