@@ -1,4 +1,4 @@
-import NfcManager, { Ndef, NfcTech } from 'react-native-nfc-manager';
+import NfcManager, { Ndef, NfcTech, type TagEvent } from 'react-native-nfc-manager';
 import { NfcServiceError } from '../src/types/nfc';
 import {
   cancel,
@@ -7,6 +7,11 @@ import {
   writeUri,
   writeUriAndVerify,
 } from '../src/services/nfcService';
+
+/** Partial tag payloads used in tests (library types omit fields the app reads at runtime). */
+function mockTag(tag: Record<string, unknown>): TagEvent {
+  return tag as unknown as TagEvent;
+}
 
 const nfc = NfcManager as jest.Mocked<typeof NfcManager> & {
   ndefHandler: {
@@ -17,7 +22,7 @@ const nfc = NfcManager as jest.Mocked<typeof NfcManager> & {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  nfc.requestTechnology.mockResolvedValue(undefined);
+  nfc.requestTechnology.mockResolvedValue(NfcTech.Ndef);
   nfc.cancelTechnologyRequest.mockResolvedValue(undefined);
   nfc.getTag.mockResolvedValue(null);
   nfc.ndefHandler.getNdefMessage.mockResolvedValue(null);
@@ -32,7 +37,7 @@ describe('init', () => {
 
 describe('readTag', () => {
   test('returns empty result when there are no NDEF records', async () => {
-    nfc.getTag.mockResolvedValue({ id: [4, 1, 2, 3], ndefMessage: [] });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '04010203', ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [] });
 
     const result = await readTag();
@@ -51,7 +56,7 @@ describe('readTag', () => {
   test('maps URI record content', async () => {
     const uri = 'https://midominio.com/nfc/ABC123';
     const record = Ndef.uriRecord(uri);
-    nfc.getTag.mockResolvedValue({ id: [4, 1, 2, 3] });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '04010203', ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [record] });
 
     const result = await readTag();
@@ -63,7 +68,7 @@ describe('readTag', () => {
   });
 
   test('formats UID bytes as colon-separated hex', async () => {
-    nfc.getTag.mockResolvedValue({ id: [0x04, 0xa3, 0x12, 0xff] });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '04a312ff', ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [] });
 
     const result = await readTag();
@@ -96,11 +101,9 @@ describe('writeUri', () => {
   test('writes URI bytes on empty tag', async () => {
     const uri = 'https://midominio.com/nfc/ABC123';
     const expectedBytes = Ndef.encodeMessage([Ndef.uriRecord(uri)]);
-    nfc.getTag.mockResolvedValue({
-      id: [4, 1, 2, 3],
-      isWritable: true,
-      ndefMessage: [],
-    });
+    nfc.getTag.mockResolvedValue(
+      mockTag({ id: '04010203', isWritable: true, ndefMessage: [] }),
+    );
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [] });
     nfc.ndefHandler.writeNdefMessage.mockResolvedValue(undefined);
 
@@ -118,7 +121,7 @@ describe('writeUri', () => {
   test('throws before write when tag is non-empty and allowOverwrite is not true', async () => {
     const existing = 'https://old.example/tag';
     const record = Ndef.uriRecord(existing);
-    nfc.getTag.mockResolvedValue({ id: [1], isWritable: true });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '01', isWritable: true, ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [record] });
 
     await expect(writeUri('https://new.example/tag')).rejects.toThrow(NfcServiceError);
@@ -126,7 +129,7 @@ describe('writeUri', () => {
   });
 
   test('throws TAG_NOT_WRITABLE when isWritable is false', async () => {
-    nfc.getTag.mockResolvedValue({ id: [1], isWritable: false });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '01', isWritable: false, ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage.mockResolvedValue({ ndefMessage: [] });
 
     await expect(writeUri('https://example.com/nfc/X')).rejects.toMatchObject({
@@ -140,7 +143,7 @@ describe('writeUriAndVerify', () => {
   test('returns verified when read-back URI matches', async () => {
     const uri = 'https://midominio.com/nfc/VERIFY1';
     const record = Ndef.uriRecord(uri);
-    nfc.getTag.mockResolvedValue({ id: [4, 1, 2, 3], isWritable: true });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '04010203', isWritable: true, ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage
       .mockResolvedValueOnce({ ndefMessage: [] })
       .mockResolvedValueOnce({ ndefMessage: [record] });
@@ -166,7 +169,7 @@ describe('writeUriAndVerify', () => {
   test('throws VERIFY_MISMATCH when read-back differs', async () => {
     const intended = 'https://midominio.com/nfc/INTENDED';
     const readBack = 'https://midominio.com/nfc/OTHER';
-    nfc.getTag.mockResolvedValue({ id: [1], isWritable: true });
+    nfc.getTag.mockResolvedValue(mockTag({ id: '01', isWritable: true, ndefMessage: [] }));
     nfc.ndefHandler.getNdefMessage
       .mockResolvedValueOnce({ ndefMessage: [] })
       .mockResolvedValueOnce({ ndefMessage: [Ndef.uriRecord(readBack)] });
