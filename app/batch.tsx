@@ -33,6 +33,8 @@ export default function BatchScreen() {
   const initDone = useRef(false);
   const lotRef = useRef<BatchLot | null>(null);
   const indexRef = useRef(0);
+  const startingRef = useRef(false);
+  const [isStarting, setIsStarting] = useState(false);
 
   const ensureInit = useCallback(async () => {
     if (!initDone.current) {
@@ -51,7 +53,8 @@ export default function BatchScreen() {
   const trimmedBase = baseUrl.trim();
   const quantity = Number.parseInt(quantityText, 10);
   const validQuantity = Number.isFinite(quantity) && quantity > 0;
-  const canStart = trimmedBase.length > 0 && validQuantity && phase === 'setup' && !busy;
+  const canStart =
+    trimmedBase.length > 0 && validQuantity && phase === 'setup' && !busy && !isStarting;
 
   const resolveOverwrite = (confirmed: boolean) => {
     setModalVisible(false);
@@ -160,21 +163,30 @@ export default function BatchScreen() {
   }, [ensureInit, finishIfDone, reset, run]);
 
   const handleStart = async () => {
-    if (!canStart) {
+    if (startingRef.current || !canStart) {
       return;
     }
+    startingRef.current = true;
+    setIsStarting(true);
 
-    const reserved = await getReservedCodes();
-    const newLot = createLot(trimmedBase, quantity, reserved);
-    await saveBatchLot(newLot);
+    try {
+      const reserved = await getReservedCodes();
+      const newLot = createLot(trimmedBase, quantity, reserved);
+      await saveBatchLot(newLot);
 
-    lotRef.current = newLot;
-    setLot(newLot);
-    indexRef.current = 0;
-    setCurrentIndex(0);
-    setPhase('running');
-    setShowFailureActions(false);
-    programCurrentTag();
+      lotRef.current = newLot;
+      setLot(newLot);
+      indexRef.current = 0;
+      setCurrentIndex(0);
+      setPhase('running');
+      setShowFailureActions(false);
+      programCurrentTag();
+    } catch {
+      setPhase('setup');
+    } finally {
+      startingRef.current = false;
+      setIsStarting(false);
+    }
   };
 
   const handleRetry = () => {
