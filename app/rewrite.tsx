@@ -1,11 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ConfirmOverwriteModal } from '@/components/ConfirmOverwriteModal';
 import { NfcStatusBanner } from '@/components/NfcStatusBanner';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useNfcOperation } from '@/hooks/useNfcOperation';
-import { init, readTag, writeUriAndVerify } from '@/services/nfcService';
+import { cancel, ensureNfcReady, init, readTag, writeUriAndVerify } from '@/services/nfcService';
 import { appendHistory } from '@/services/storageService';
 import { colors } from '@/theme/colors';
 import { NfcServiceError } from '@/types/nfc';
@@ -57,6 +57,13 @@ export default function RewriteScreen() {
       await init();
       initDone.current = true;
     }
+    await ensureNfcReady();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void cancel().catch(() => undefined);
+    };
   }, []);
 
   const busy =
@@ -136,6 +143,7 @@ export default function RewriteScreen() {
         onWriting: () => setStatus('WRITING'),
         onVerifying: () => setStatus('VERIFYING'),
         allowOverwrite,
+        expectedPreviousContent: probe.content,
       });
 
       await appendHistory({
@@ -144,6 +152,15 @@ export default function RewriteScreen() {
         operation: 'REWRITE',
         verified: result.verified,
       });
+
+      if (!result.verified) {
+        setWriteResult(result);
+        setReadResult(probe);
+        throw new NfcServiceError(
+          'VERIFY_MISMATCH',
+          'Read-back URI does not match',
+        );
+      }
 
       setWriteResult(result);
       setReadResult(probe);

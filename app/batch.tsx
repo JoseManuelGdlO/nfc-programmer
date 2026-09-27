@@ -6,7 +6,7 @@ import { NfcStatusBanner } from '@/components/NfcStatusBanner';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useNfcOperation } from '@/hooks/useNfcOperation';
 import { countLotOutcomes, createLot, isLotFinished } from '@/services/batchLot';
-import { init, readTag, writeUriAndVerify } from '@/services/nfcService';
+import { cancel, ensureNfcReady, init, readTag, writeUriAndVerify } from '@/services/nfcService';
 import {
   appendHistory,
   getReservedCodes,
@@ -15,8 +15,9 @@ import {
 } from '@/services/storageService';
 import { colors } from '@/theme/colors';
 import type { BatchLot } from '@/types/history';
+import { NfcServiceError } from '@/types/nfc';
 
-type BatchPhase = 'setup' | 'running' | 'summary';
+type BatchPhase = 'setup' | 'running' | 'waiting_remove' | 'summary';
 
 export default function BatchScreen() {
   const { status, error, setStatus, run, reset } = useNfcOperation();
@@ -24,7 +25,8 @@ export default function BatchScreen() {
   const [quantityText, setQuantityText] = useState('10');
   const [lot, setLot] = useState<BatchLot | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [phase, setPhase] = useState<BatchPhase>('setup');
+  const [phase, setPhaseState] = useState<BatchPhase>('setup');
+  const phaseRef = useRef<BatchPhase>('setup');
   const [showFailureActions, setShowFailureActions] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -36,11 +38,23 @@ export default function BatchScreen() {
   const startingRef = useRef(false);
   const [isStarting, setIsStarting] = useState(false);
 
+  const setBatchPhase = useCallback((next: BatchPhase) => {
+    phaseRef.current = next;
+    setPhaseState(next);
+  }, []);
+
   const ensureInit = useCallback(async () => {
     if (!initDone.current) {
       await init();
       initDone.current = true;
     }
+    await ensureNfcReady();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void cancel().catch(() => undefined);
+    };
   }, []);
 
   const busy =
@@ -80,11 +94,11 @@ export default function BatchScreen() {
     await updateBatchLot(completed);
     lotRef.current = completed;
     setLot(completed);
-    setPhase('summary');
+    setBatchPhase('summary');
     setShowFailureActions(false);
     setStatus('COMPLETED');
     return true;
-  }, [setStatus]);
+  }, [setBatchPhase, setStatus]);
 
   useEffect(() => {
     if (phase === 'running' && status === 'ERROR') {
@@ -119,9 +133,10 @@ export default function BatchScreen() {
       if (!probe.isEmpty) {
         const confirmed = await askOverwrite(probe.content);
         if (!confirmed) {
-          setOpStatus('IDLE');
-          void programCurrentTag();
-          return;
+          throw new NfcServiceError(
+            'SESSION_CANCELLED',
+            'Overwrite confirmation cancelled',
+          );
         }
         allowOverwrite = true;
       }
@@ -132,6 +147,7 @@ export default function BatchScreen() {
         onWriting: () => setOpStatus('WRITING'),
         onVerifying: () => setOpStatus('VERIFYING'),
         allowOverwrite,
+        expectedPreviousContent: probe.content,
       });
 
       await appendHistory({
@@ -140,6 +156,13 @@ export default function BatchScreen() {
         operation: 'WRITE',
         verified: writeResult.verified,
       });
+
+      if (!writeResult.verified) {
+        throw new NfcServiceError(
+          'VERIFY_MISMATCH',
+          'Read-back URI does not match',
+        );
+      }
 
       const nextItems = activeLot.items.map((entry, i) =>
         i === index ? { ...entry, status: 'used' as const } : entry,
@@ -154,13 +177,10 @@ export default function BatchScreen() {
         return;
       }
 
-      const nextIndex = index + 1;
-      indexRef.current = nextIndex;
-      setCurrentIndex(nextIndex);
       setOpStatus('COMPLETED');
-      void programCurrentTag();
+      setBatchPhase('waiting_remove');
     });
-  }, [ensureInit, finishIfDone, reset, run]);
+  }, [ensureInit, finishIfDone, reset, run, setBatchPhase]);
 
   const handleStart = async () => {
     if (startingRef.current || !canStart) {
@@ -178,15 +198,33 @@ export default function BatchScreen() {
       setLot(newLot);
       indexRef.current = 0;
       setCurrentIndex(0);
-      setPhase('running');
+      setBatchPhase('running');
       setShowFailureActions(false);
       programCurrentTag();
     } catch {
-      setPhase('setup');
+      setBatchPhase('setup');
     } finally {
       startingRef.current = false;
       setIsStarting(false);
     }
+  };
+
+  const handleNextTag = () => {
+    if (phaseRef.current !== 'waiting_remove') {
+      return;
+    }
+    const activeLot = lotRef.current;
+    if (!activeLot) {
+      return;
+    }
+    const nextIndex = indexRef.current + 1;
+    if (nextIndex >= activeLot.items.length) {
+      return;
+    }
+    indexRef.current = nextIndex;
+    setCurrentIndex(nextIndex);
+    setBatchPhase('running');
+    programCurrentTag();
   };
 
   const handleRetry = () => {
@@ -236,7 +274,7 @@ export default function BatchScreen() {
     await updateBatchLot(aborted);
     lotRef.current = aborted;
     setLot(aborted);
-    setPhase('summary');
+    setBatchPhase('summary');
     setShowFailureActions(false);
     reset();
   };
@@ -246,7 +284,7 @@ export default function BatchScreen() {
     setLot(null);
     indexRef.current = 0;
     setCurrentIndex(0);
-    setPhase('setup');
+    setBatchPhase('setup');
     setShowFailureActions(false);
     reset();
   };
@@ -295,7 +333,7 @@ export default function BatchScreen() {
         </>
       ) : null}
 
-      {phase === 'running' && lot ? (
+      {(phase === 'running' || phase === 'waiting_remove') && lot ? (
         <View style={styles.progressCard}>
           <Text style={styles.tagProgress}>
             TAG {tagNumber} / {totalTags}
@@ -303,8 +341,18 @@ export default function BatchScreen() {
           <Text style={styles.uriPreview} selectable>
             {lot.items[currentIndex]?.uri ?? '—'}
           </Text>
-          <Text style={styles.waitingHint}>Acerca el NFC</Text>
+          {phase === 'waiting_remove' ? (
+            <Text style={styles.waitingHint}>
+              Retira el NFC / TAG {tagNumber} completado
+            </Text>
+          ) : (
+            <Text style={styles.waitingHint}>Acerca el NFC</Text>
+          )}
         </View>
+      ) : null}
+
+      {phase === 'waiting_remove' ? (
+        <PrimaryButton label="Siguiente NFC" fullWidth onPress={handleNextTag} />
       ) : null}
 
       {showFailureActions && phase === 'running' ? (

@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { NfcStatusBanner } from '@/components/NfcStatusBanner';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useNfcOperation } from '@/hooks/useNfcOperation';
-import { init, readTag } from '@/services/nfcService';
+import { cancel, ensureNfcReady, init, readTag } from '@/services/nfcService';
 import { colors } from '@/theme/colors';
 import type { NdefRecordSummary, TagReadResult } from '@/types/nfc';
 
@@ -53,6 +53,13 @@ export default function ReadScreen() {
       await init();
       initDone.current = true;
     }
+    await ensureNfcReady();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void cancel().catch(() => undefined);
+    };
   }, []);
 
   const busy =

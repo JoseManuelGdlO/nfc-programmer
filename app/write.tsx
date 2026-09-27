@@ -1,13 +1,14 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { ConfirmOverwriteModal } from '@/components/ConfirmOverwriteModal';
 import { NfcStatusBanner } from '@/components/NfcStatusBanner';
 import { PrimaryButton } from '@/components/PrimaryButton';
 import { useNfcOperation } from '@/hooks/useNfcOperation';
-import { init, readTag, writeUriAndVerify } from '@/services/nfcService';
+import { cancel, ensureNfcReady, init, readTag, writeUriAndVerify } from '@/services/nfcService';
 import { appendHistory } from '@/services/storageService';
 import { colors } from '@/theme/colors';
+import { NfcServiceError } from '@/types/nfc';
 import type { WriteVerifyResult } from '@/types/nfc';
 
 function ChecklistRow({ ok, label }: { ok: boolean; label: string }) {
@@ -45,6 +46,13 @@ export default function WriteScreen() {
       await init();
       initDone.current = true;
     }
+    await ensureNfcReady();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void cancel().catch(() => undefined);
+    };
   }, []);
 
   const busy =
@@ -100,6 +108,7 @@ export default function WriteScreen() {
         onWriting: () => setStatus('WRITING'),
         onVerifying: () => setStatus('VERIFYING'),
         allowOverwrite,
+        expectedPreviousContent: probe.content,
       });
 
       await appendHistory({
@@ -108,6 +117,14 @@ export default function WriteScreen() {
         operation: 'WRITE',
         verified: writeResult.verified,
       });
+
+      if (!writeResult.verified) {
+        setResult(writeResult);
+        throw new NfcServiceError(
+          'VERIFY_MISMATCH',
+          'Read-back URI does not match',
+        );
+      }
 
       setResult(writeResult);
       setStatus('COMPLETED');
