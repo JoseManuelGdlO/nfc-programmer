@@ -9,6 +9,7 @@ type Props = {
   onPress: () => void;
   variant?: Variant;
   disabled?: boolean;
+  fullWidth?: boolean;
 };
 
 function variantStyles(variant: Variant, disabled: boolean) {
@@ -38,7 +39,13 @@ function variantStyles(variant: Variant, disabled: boolean) {
   }
 }
 
-export function PrimaryButton({ label, onPress, variant = 'primary', disabled = false }: Props) {
+export function PrimaryButton({
+  label,
+  onPress,
+  variant = 'primary',
+  disabled = false,
+  fullWidth = false,
+}: Props) {
   const palette = variantStyles(variant, disabled);
 
   return (
@@ -48,6 +55,7 @@ export function PrimaryButton({ label, onPress, variant = 'primary', disabled = 
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
+        fullWidth && styles.fullWidth,
         palette.container,
         pressed && !disabled ? styles.pressed : null,
       ]}
@@ -58,6 +66,10 @@ export function PrimaryButton({ label, onPress, variant = 'primary', disabled = 
 }
 
 const styles = StyleSheet.create({
+  fullWidth: {
+    alignSelf: 'stretch',
+    width: '100%',
+  },
   button: {
     minHeight: 52,
     borderRadius: 6,

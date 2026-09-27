@@ -1,12 +1,42 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Link, useRouter } from 'expo-router';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { PrimaryButton } from '@/components/PrimaryButton';
 import { colors } from '@/theme/colors';
 
+const PRIMARY_ACTIONS = [
+  { label: 'Grabar NFC', href: '/write' as const },
+  { label: 'Leer NFC', href: '/read' as const },
+  { label: 'Reescribir NFC', href: '/rewrite' as const },
+  { label: 'Grabación en serie', href: '/batch' as const },
+  { label: 'Historial', href: '/history' as const },
+] as const;
+
 export default function HomeScreen() {
+  const router = useRouter();
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>NFC Programmer</Text>
-      <Text style={styles.subtitle}>Pantallas NFC en tareas siguientes</Text>
+      <Text style={styles.hero}>NFC Programmer</Text>
+
+      <View style={styles.actions}>
+        {PRIMARY_ACTIONS.map(({ label, href }) => (
+          <PrimaryButton
+            key={href}
+            label={label}
+            fullWidth
+            onPress={() => router.push(href)}
+          />
+        ))}
+      </View>
+
+      <View style={styles.dangerSection}>
+        <Link href="/lock" asChild>
+          <Pressable accessibilityRole="button" style={({ pressed }) => [pressed && styles.dangerPressed]}>
+            <Text style={styles.dangerLabel}>Bloqueo permanente</Text>
+          </Pressable>
+        </Link>
+      </View>
     </View>
   );
 }
@@ -14,20 +44,33 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: colors.background,
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingTop: 48,
+    paddingBottom: 32,
   },
-  title: {
+  hero: {
     color: colors.ink,
-    fontSize: 22,
-    fontWeight: '600',
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 32,
   },
-  subtitle: {
-    color: colors.muted,
-    fontSize: 14,
-    marginTop: 8,
-    textAlign: 'center',
+  actions: {
+    gap: 12,
+  },
+  dangerSection: {
+    marginTop: 'auto',
+    paddingTop: 32,
+    alignItems: 'center',
+  },
+  dangerLabel: {
+    color: colors.danger,
+    fontSize: 15,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  dangerPressed: {
+    opacity: 0.75,
   },
 });

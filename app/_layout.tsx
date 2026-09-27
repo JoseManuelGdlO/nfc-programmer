@@ -12,7 +12,13 @@ export default function RootLayout() {
         contentStyle: { backgroundColor: colors.background },
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Inicio' }} />
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="write" options={{ title: 'Grabar NFC' }} />
+      <Stack.Screen name="read" options={{ title: 'Leer NFC' }} />
+      <Stack.Screen name="rewrite" options={{ title: 'Reescribir NFC' }} />
+      <Stack.Screen name="batch" options={{ title: 'Grabación en serie' }} />
+      <Stack.Screen name="history" options={{ title: 'Historial' }} />
+      <Stack.Screen name="lock" options={{ title: 'Bloqueo permanente' }} />
       <Stack.Screen name="+not-found" options={{ title: 'No encontrado' }} />
     </Stack>
   );
