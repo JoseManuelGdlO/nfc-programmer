@@ -135,6 +135,9 @@ Dashboard entries (large industrial buttons):
 - Grabación en serie
 - Historial
 
+Secondary (danger / non-production) entry, visually separated:
+- Bloqueo permanente (v1: warnings only; no irreversible action)
+
 Visual direction: administrative / industrial tool — high contrast, clear status, large tap targets. Not a consumer marketing site.
 
 ---
@@ -160,7 +163,7 @@ Visual direction: administrative / industrial tool — high contrast, clear stat
 ### 5.3 Rewrite
 1. Read first; display current content
 2. Require writable; else error and stop
-3. User enters new content
+3. User enters new URI (same NDEF URI record format as write)
 4. Overwrite confirmation (always, since content exists)
 5. Write → verify → history `{ operation: "REWRITE", verified }`
 6. **Never** invoke lock
